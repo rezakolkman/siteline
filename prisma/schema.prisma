@@ -1,7 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Siteline — Construction Management
+// Prisma 7 schema
 
 generator client {
   provider = "prisma-client"
@@ -10,4 +8,340 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum ProjectType {
+  NEW_BUILD
+  RENOVATION
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETE
+}
+
+enum PhaseStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETE
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETE
+  BLOCKED
+}
+
+enum VOStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum DrawStatus {
+  UPCOMING
+  PENDING
+  PAID
+}
+
+enum BOQItemStatus {
+  PENDING
+  APPROVED
+}
+
+// ─── Auth (Auth.js v5 / next-auth@beta) ───────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+
+  // App relations
+  ownedProjects Project[]
+  photos        Photo[]
+  updates       Update[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+// ─── Client ───────────────────────────────────────────────────────────────────
+
+model Client {
+  id       String    @id @default(cuid())
+  name     String
+  email    String?
+  phone    String?
+  projects Project[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Project ──────────────────────────────────────────────────────────────────
+
+model Project {
+  id            String        @id @default(cuid())
+  name          String
+  type          ProjectType   @default(NEW_BUILD)
+  status        ProjectStatus @default(ACTIVE)
+  location      String?
+  bedrooms      Int?
+
+  // Financial — all amounts in IDR (Rupiah), stored as BigInt
+  contractValue  BigInt  @default(0) // original contract value
+  contingencyPct Float   @default(5.0) // % for provisional sum
+
+  // Dates
+  startDate     DateTime?
+  targetEndDate DateTime?
+
+  // Client portal access — unique token for passwordless client login
+  clientPortalToken String? @unique
+
+  // Relations
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+  ownerId  String
+  owner    User    @relation(fields: [ownerId], references: [id])
+
+  phases       Phase[]
+  milestones   Milestone[]
+  boqItems     BOQItem[]
+  variations   VariationOrder[]
+  photos       Photo[]
+  paymentDraws PaymentDraw[]
+  documents    Document[]
+  updates      Update[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Phase ────────────────────────────────────────────────────────────────────
+
+model Phase {
+  id        String      @id @default(cuid())
+  projectId String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  color     String?     // hex, e.g. "#e67e22" — for Gantt display
+  order     Int         // display order within project
+  status    PhaseStatus @default(NOT_STARTED)
+  startDate DateTime?
+  endDate   DateTime?
+
+  tasks    Task[]
+  boqItems BOQItem[]
+  photos   Photo[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Task ─────────────────────────────────────────────────────────────────────
+
+model Task {
+  id        String     @id @default(cuid())
+  phaseId   String
+  phase     Phase      @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  name      String
+  status    TaskStatus @default(NOT_STARTED)
+  startDate DateTime?
+  endDate   DateTime?
+  assignee  String?    // name only for MVP
+  progress  Int        @default(0) // 0–100
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Milestone ────────────────────────────────────────────────────────────────
+
+model Milestone {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  date        DateTime?
+  completedAt DateTime?
+  isComplete  Boolean   @default(false)
+  order       Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── BOQ Item ─────────────────────────────────────────────────────────────────
+
+model BOQItem {
+  id          String        @id @default(cuid())
+  projectId   String
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId     String?
+  phase       Phase?        @relation(fields: [phaseId], references: [id])
+  code        String?       // e.g. "FDN-001"
+  description String
+  unit        String?       // m², pcs, LS, m, etc.
+  quantity    Float         @default(1)
+  unitPrice   BigInt        // IDR per unit
+  total       BigInt        // IDR — quantity × unitPrice (computed on save)
+  status      BOQItemStatus @default(PENDING)
+  order       Int           @default(0)
+
+  // If this item belongs to a variation order
+  isVariation Boolean        @default(false)
+  variationId String?
+  variation   VariationOrder? @relation(fields: [variationId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Variation Order ──────────────────────────────────────────────────────────
+
+model VariationOrder {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  number    String   // "VO-001", "VO-002" — auto-generated
+  title     String
+  scope     String?  // full scope description
+  requestedBy String? // "Client" | "Contractor"
+  amount    BigInt   // IDR — total of all line items
+  status    VOStatus @default(PENDING)
+
+  raisedDate    DateTime  @default(now())
+  respondByDate DateTime?
+  approvedAt    DateTime?
+  rejectedAt    DateTime?
+  rejectionNote String?
+
+  boqItems    BOQItem[]
+  attachments Document[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Photo ────────────────────────────────────────────────────────────────────
+
+model Photo {
+  id          String  @id @default(cuid())
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseId     String?
+  phase       Phase?  @relation(fields: [phaseId], references: [id])
+  url         String  // storage URL (Vercel Blob etc.)
+  caption     String?
+  isMilestone Boolean @default(false)
+  isBefore    Boolean @default(false) // renovation: document before condition
+  uploaderName String? // display name of uploader
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id])
+
+  takenAt   DateTime @default(now())
+  createdAt DateTime @default(now())
+}
+
+// ─── Payment Draw ─────────────────────────────────────────────────────────────
+
+model PaymentDraw {
+  id        String     @id @default(cuid())
+  projectId String
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title     String
+  trigger   String?    // "Foundation complete" etc.
+  amount    BigInt     // IDR
+  pctOfContract Float? // e.g. 14.5
+  status    DrawStatus @default(UPCOMING)
+  dueDate   DateTime?
+  paidDate  DateTime?
+  order     Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Document ─────────────────────────────────────────────────────────────────
+
+model Document {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name      String
+  url       String  // storage URL
+  fileType  String? // "permit", "drawing", "contract", "vo-attachment" etc.
+  isClientVisible Boolean @default(false)
+
+  variationId String?
+  variation   VariationOrder? @relation(fields: [variationId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// ─── Update / Site Note ───────────────────────────────────────────────────────
+
+model Update {
+  id           String  @id @default(cuid())
+  projectId    String
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  content      String
+  authorName   String? // display name (fallback if no user)
+  userId       String?
+  user         User?   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
 }
